@@ -2,16 +2,15 @@
 #include <SFML/Window.hpp>
 #include <SFML/Graphics.hpp>
 #include <random>
-#include <algorithm>
-float square_size = 10;
-unsigned int Width = 900;
-unsigned int Height = 600;
+#include <vector>
 
-int row_length = Width/square_size;
-int col_length = Height/square_size;
-
-
-
+const int square_size = 10;          // int, not float — it is a grid step
+const int Width  = 1600;
+const int Height = 900;
+const float cursor_radius = 10.f;
+const int row_length = Width  / square_size;   // 90 columns
+const int col_length = Height / square_size;   // 60 rows
+const int area_multiplier = 3;
 
 struct pos {
     int x;
@@ -19,144 +18,211 @@ struct pos {
 };
 
 
-// matrix to check local area
-std::vector<pos> matrix_check(pos block) {
-    std::vector<pos> poses;
-    for (int i = block.x - square_size; i <= block.x + square_size; i+= square_size) {
-        for (int j = block.y - square_size; j <= block.y +square_size;j+= square_size) {
-            if ((i <0 || j<0)||(i > Width|| j > Height)||(i==block.x&&j==block.y)) {
-                continue;
-            }
-            pos temp(i,j);
-            poses.push_back(temp);
-
-
-        }
-    }
-    return poses;
+inline int index_of(int x, int y) {
+    return (x / square_size) * col_length + (y / square_size);
 }
 
 
+
+std::vector<int> matrix_check(pos block) {
+    std::vector<int> neighbours;
+    neighbours.reserve(8);
+    for (int di = -square_size ; di <= square_size; di += square_size) {
+        for (int dj = -square_size; dj <= square_size; dj += square_size) {
+            if (di == 0 && dj == 0) continue;          // skip the cell itself
+            const int i = (block.x + di + Width)  % Width;
+            const int j = (block.y + dj + Height) % Height;
+            neighbours.push_back(index_of(i, j));
+        }
+    }
+    return neighbours;
+}
+
+
+
+
+
+
 class block {
-    public:
+public:
     float x;
     float y;
     int state;
     sf::RectangleShape rect;
-    block(float x_, float y_ , int state_)
-        :x(x_),y(y_),state(state_)
+
+    block(float x_, float y_, int state_)
+        : x(x_), y(y_), state(state_)
     {
-        rect.setSize(sf::Vector2f(square_size,square_size));
-        rect.setFillColor(sf::Color(0,0,255));
-        rect.setOutlineColor(sf::Color(0,0,0));
-        rect.setOutlineThickness(5.f);
-        rect.setPosition({x,y});
-
-    }
-    std::vector<int> check(std::vector<block> things,std::vector<int> to_update) {
-        //check area around block
-        //add into to change states
-        int alive= 0;
-        pos temp(x,y);
-        //player index
-        auto player = std::find_if(things.begin(), things.end(), [&](const block& b) {
-                return b.x == x && b.y == y;
-            });
-        int player_index = std::distance(things.begin(),player);
-
-
-
-        //using the function
-        std::vector<pos> check_area = matrix_check(temp);
-        for (auto item: check_area) {
-            auto it = std::find_if(things.begin(), things.end(), [&](const block& b) {
-                return b.x == item.x && b.y == item.y;
-            });
-            if (it->state == 1) {
-                ++alive;
-            }
-        }
-        if (state == 1 && alive <2) {
-            to_update[player_index] = 0;
-        }else if (state == 1 && alive > 3) {
-            to_update[player_index] = 0;
-        }else if (state ==0 && alive == 3) {
-            to_update[player_index] = 1;
-        }
-        return to_update;
-
-        /*std::cout << "start\n";
-        for (auto item : check_area) {
-            std::cout << item.x<< ","<< item.y << "\n";
-        }
-        std::cout<< "end\n";
-        */
-
-
-
+        rect.setSize(sf::Vector2f(square_size , square_size ));
+        //rect.setOutlineThickness(0.f);
+        rect.setPosition({x, y});
     }
 
 
-    void draw(sf::RenderWindow &window) {
-        if (state ==1) {
-            rect.setFillColor(sf::Color(0,255,0));
-        }
+    void check(const std::vector<block>& things, std::vector<int>& to_update) const {
+        const int self = index_of(static_cast<int>(x), static_cast<int>(y));
+
+        int alive = 0;
+        for (int n : matrix_check(pos{static_cast<int>(x), static_cast<int>(y)}))
+            alive += things[n].state;
+
+        if (state == 1)
+            to_update[self] = (alive == 2 || alive == 3) ? 1 : 0;
+        else
+            to_update[self] = (alive == 3) ? 1 : 0;
+    }
+
+    void draw(sf::RenderWindow& window) {
+        rect.setFillColor(state == 1 ? sf::Color(0, 255, 0) : sf::Color(0, 0, 60));
         window.draw(rect);
+    }
+};
+
+std::vector<int> area_revive(const int area,int x, int y) {
+    std::vector<int> neighbours;
+    neighbours.reserve((3+2*(area-1))*(3+2*(area-1)));
+    for (int di = -square_size *area; di <= square_size*area; di += square_size) {
+        for (int dj = -square_size*area; dj <= square_size*area; dj += square_size) {
+            if (di == 0 && dj == 0) continue;          // skip the cell itself
+            const int i = (x + di + Width)  % Width;
+            const int j = (y + dj + Height) % Height;
+            neighbours.push_back(index_of(i, j));
+        }
+    }
+    return neighbours;
+}
+
+
+
+
+class cursor{
+
+public:
+    float x;
+    float y;
+    float radius;
+    sf::CircleShape shape;
+    sf::Color color;
+
+    cursor(float x_ , float y_, float radius_,sf::Color color_)
+        : x(x_), y(y_), radius(radius_), color(color_)
+    {
+        shape.setRadius(10.f);
+        shape.setOrigin({radius,radius});
+        shape.setFillColor(color);
+        shape.setPosition({x,y});
+    }
+
+    void draw(sf::RenderWindow& window) {
+        shape.setPosition({x,y});
+        window.draw(shape);
+    }
+    void movement(sf::RenderWindow& window) {
+        sf::Vector2i mouse = sf::Mouse::getPosition(window);
+        x = mouse.x;
+        y = mouse.y;
+    }
+    void revive(std::vector<int>& state) {
+        // area
+
+        std::vector<int> dude = area_revive(area_multiplier,x,y);
+
+        for (int item: dude) {
+            state[item] = 1;
+        }
+
+
+
+
     }
 
 
 };
 
 
+
+
+
+
+
+
 int main() {
-    std::cout << row_length<< ","<< col_length<< "\n";
+    std::cout << row_length << "," << col_length << "\n";
+    std::cout << "random [y,n]: ";
+    char ans;
+    std::cin >> ans;
+    bool rand = false;
+    if (ans == 'y') {
+        rand = true;
+    }else if (ans == 'n') {
+        std::cout << "ok";
+    } else {
+        std::cout << "unknown";
+    }
 
 
 
-    sf::RenderWindow window(sf::VideoMode({Width, Height}), "My window");
-    std::vector<int> state;
 
-    std::vector<pos> blocks;
+    sf::RenderWindow window(
+        sf::VideoMode({static_cast<unsigned>(Width), static_cast<unsigned>(Height)}),
+        "My window");
+    window.setFramerateLimit(60);
+
+
+    // rendor mouse
+    cursor m(150.f,150.f,cursor_radius,sf::Color::Red);
+
+
+
+
+    std::mt19937 rng(std::random_device{}());
+    std::bernoulli_distribution coin(0.30);
+
+    std::vector<int>   state;
     std::vector<block> all_blocks;
+    state.reserve(row_length * col_length);
+    all_blocks.reserve(row_length * col_length);
 
-    //positions
-    for (int x_ = 0 ; x_ < Width; x_ += square_size ) {
-        for (int y_ = 0; y_ < Height; y_ += square_size){
+    for (int x_ = 0; x_ < Width; x_ += square_size) {
+        for (int y_ = 0; y_ < Height; y_ += square_size) {
+            int alive = 0;
+            if (rand == true ) {
+                alive = coin(rng) ? 1 : 0;
+            }
 
-            pos position(x_,y_);
-            blocks.push_back(position);
+            state.push_back(alive);
+            all_blocks.emplace_back(static_cast<float>(x_), static_cast<float>(y_), alive);
         }
     }
-    //rendoring into window
-    for (const auto& item:blocks) {
-        int rand = std::rand() % 2;
-        state.push_back(rand);
-        block temp(item.x,item.y,rand);
-        all_blocks.push_back(temp);
-    }
+
+    std::vector<int> next_state(state.size());
 
     while (window.isOpen())
     {
-        while (const std::optional event = window.pollEvent())
-        {
+        while (const std::optional event = window.pollEvent()) {
             if (event->is<sf::Event::Closed>())
                 window.close();
         }
-        for (int i = 0; i< state.size();i++) {
+
+        for (std::size_t i = 0; i < state.size(); ++i)
             all_blocks[i].state = state[i];
-        }
+
+        m.movement(window);
+
+
+
+
+        // Read from this generation, write to the next, then swap.
+        for (const auto& item : all_blocks)
+            item.check(all_blocks, next_state);
+        m.revive(next_state);
+        state.swap(next_state);
         //rendor
         window.clear(sf::Color::Black);
 
-        for (auto item :all_blocks) {
-            state = item.check(all_blocks, state);
+        for (auto& item : all_blocks)
             item.draw(window);
-        }
-
-
-
-
+        m.draw(window);
         window.display();
-
     }
 }
